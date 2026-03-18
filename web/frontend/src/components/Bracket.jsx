@@ -103,6 +103,98 @@ function derivePicksBracket(bracketData, userPicks) {
   return derived
 }
 
+// ─── Path-mode bracket derivation (selected team always wins) ─────────────────
+
+function derivePathBracket(bracketData, pathTeam) {
+  const teamSeeds = {}
+  bracketData.teams?.forEach(t => { teamSeeds[t.Team] = t.Seed })
+
+  const modelLookup = {}
+  Object.values(bracketData.rounds).forEach(round =>
+    round.games.forEach(g => {
+      modelLookup[`${g.team_a}|${g.team_b}`] = g
+      modelLookup[`${g.team_b}|${g.team_a}`] = g
+    })
+  )
+
+  const derived = []
+
+  for (const region of ['East', 'West', 'South', 'Midwest']) {
+    const r64 = (bracketData.rounds['1']?.games || []).filter(g => g.region === region)
+    let slots = r64.flatMap(g => [g.team_a, g.team_b])
+
+    for (let rn = 1; rn <= 4; rn++) {
+      const numGames = Math.floor(slots.length / 2)
+      const next = []
+      for (let gi = 0; gi < numGames; gi++) {
+        const teamA  = slots[gi * 2]      || null
+        const teamB  = slots[gi * 2 + 1] || null
+        const gameId = `${region}-${rn}-${gi}`
+        const model  = (teamA && teamB) ? (modelLookup[`${teamA}|${teamB}`] ?? null) : null
+        // pathTeam always wins; other games use AI prediction
+        const userWinner = (teamA === pathTeam || teamB === pathTeam)
+          ? pathTeam
+          : (model?.winner ?? teamA)
+        derived.push({
+          gameId, region, round_num: rn,
+          team_a: teamA, team_b: teamB,
+          seed_a: teamA ? teamSeeds[teamA] : null,
+          seed_b: teamB ? teamSeeds[teamB] : null,
+          winner: model?.winner ?? null, userWinner,
+          modelWinner: model?.winner ?? null,
+          win_prob: model?.win_prob ?? 0.5, confidence: model?.confidence ?? 'low',
+          factors: model?.factors ?? null,
+        })
+        next.push(userWinner)
+      }
+      slots = next
+    }
+  }
+
+  // Regional champions
+  const champs = {}
+  for (const r of ['East', 'West', 'South', 'Midwest'])
+    champs[r] = derived.find(g => g.region === r && g.round_num === 4)?.userWinner ?? null
+
+  // Final Four
+  const ffWinners = []
+  ;[['East', 'West'], ['South', 'Midwest']].forEach(([r1, r2], fi) => {
+    const teamA = champs[r1], teamB = champs[r2]
+    const model = bracketData.rounds['5']?.games?.[fi]
+    const userWinner = (teamA === pathTeam || teamB === pathTeam)
+      ? pathTeam
+      : (model?.winner ?? teamA)
+    derived.push({
+      gameId: `FF-${fi}`, region: '', round_num: 5,
+      team_a: teamA, team_b: teamB,
+      seed_a: teamA ? teamSeeds[teamA] : null, seed_b: teamB ? teamSeeds[teamB] : null,
+      winner: model?.winner ?? null, userWinner,
+      modelWinner: model?.winner ?? null,
+      win_prob: model?.win_prob ?? 0.5, confidence: model?.confidence ?? 'low',
+      factors: model?.factors ?? null,
+    })
+    ffWinners.push(userWinner)
+  })
+
+  // Championship
+  const [w0, w1] = ffWinners
+  const model = bracketData.rounds['6']?.games?.[0]
+  const userWinner = (w0 === pathTeam || w1 === pathTeam)
+    ? pathTeam
+    : (model?.winner ?? w0)
+  derived.push({
+    gameId: 'CHAMP', region: '', round_num: 6,
+    team_a: w0 ?? null, team_b: w1 ?? null,
+    seed_a: w0 ? teamSeeds[w0] : null, seed_b: w1 ? teamSeeds[w1] : null,
+    winner: model?.winner ?? null, userWinner,
+    modelWinner: model?.winner ?? null,
+    win_prob: model?.win_prob ?? 0.5, confidence: model?.confidence ?? 'low',
+    factors: model?.factors ?? null,
+  })
+
+  return derived
+}
+
 // ─── Team Slot ─────────────────────────────────────────────────────────────────
 
 function TeamSlot({ name, seed, isWinner, isPicked, isSelected, onClick, probability, confidence, mode, champOdds }) {
@@ -137,11 +229,11 @@ function TeamSlot({ name, seed, isWinner, isPicked, isSelected, onClick, probabi
 
 // ─── Matchup ───────────────────────────────────────────────────────────────────
 
-function Matchup({ game, onTeamSelect, selectedTeam, reverse, roundNum, mode, onPick, mcOdds }) {
+function Matchup({ game, onTeamSelect, selectedTeam, reverse, roundNum, mode, onPick, mcOdds, pathTeam }) {
   if (!game) return <div className="matchup empty" />
 
   const picks  = mode === 'picks'
-  const winner = picks ? game.userWinner : game.winner
+  const winner = (picks || pathTeam) ? game.userWinner : game.winner
   const { team_a, team_b, win_prob = 0.5, confidence = 'low', seed_a, seed_b, gameId } = game
 
   const raw   = [
@@ -155,8 +247,11 @@ function Matchup({ game, onTeamSelect, selectedTeam, reverse, roundNum, mode, on
     if (picks && onPick) onPick(gameId, name)
   }
 
+  const onPath = pathTeam && (team_a === pathTeam || team_b === pathTeam)
+  const dimmed = pathTeam && !onPath
+
   return (
-    <div className={`matchup round-${roundNum}${picks ? ' picks-mode' : ''}`}>
+    <div className={['matchup', `round-${roundNum}`, picks ? 'picks-mode' : '', onPath ? 'path-on' : '', dimmed ? 'path-dim' : ''].filter(Boolean).join(' ')}>
       {slots.map(({ name, seed, prob }) => (
         <TeamSlot
           key={name ?? `tbd-${seed}`}
@@ -177,7 +272,7 @@ function Matchup({ game, onTeamSelect, selectedTeam, reverse, roundNum, mode, on
 
 // ─── Round Column ──────────────────────────────────────────────────────────────
 
-function RoundColumn({ region, games, roundNum, onTeamSelect, selectedTeam, reverse, mode, onPick, mcOdds }) {
+function RoundColumn({ region, games, roundNum, onTeamSelect, selectedTeam, reverse, mode, onPick, mcOdds, pathTeam }) {
   const rGames = games.filter(g => g.round_num === roundNum && g.region === region)
   return (
     <div className={`round-col round-r${roundNum}${reverse ? ' reverse' : ''}`}>
@@ -194,6 +289,7 @@ function RoundColumn({ region, games, roundNum, onTeamSelect, selectedTeam, reve
               mode={mode}
               onPick={onPick}
               mcOdds={mcOdds}
+              pathTeam={pathTeam}
             />
           </div>
         ))}
@@ -204,8 +300,8 @@ function RoundColumn({ region, games, roundNum, onTeamSelect, selectedTeam, reve
 
 // ─── Region Bracket ────────────────────────────────────────────────────────────
 
-function RegionBracket({ region, games, onTeamSelect, selectedTeam, reverse, mode, onPick, mcOdds }) {
-  const rounds = reverse ? [4, 3, 2, 1] : [1, 2, 3, 4]
+function RegionBracket({ region, games, onTeamSelect, selectedTeam, reverse, mode, onPick, mcOdds, pathTeam }) {
+  const rounds = [1, 2, 3, 4]
   return (
     <div className={`region-bracket${reverse ? ' reverse' : ''}`}>
       <div className="region-name" style={{ color: REGION_COLOR[region] }}>{region}</div>
@@ -214,7 +310,7 @@ function RegionBracket({ region, games, onTeamSelect, selectedTeam, reverse, mod
           <RoundColumn
             key={rn} region={region} games={games} roundNum={rn}
             onTeamSelect={onTeamSelect} selectedTeam={selectedTeam}
-            reverse={reverse} mode={mode} onPick={onPick} mcOdds={mcOdds}
+            reverse={reverse} mode={mode} onPick={onPick} mcOdds={mcOdds} pathTeam={pathTeam}
           />
         ))}
       </div>
@@ -222,64 +318,94 @@ function RegionBracket({ region, games, onTeamSelect, selectedTeam, reverse, mod
   )
 }
 
-// ─── First Four ────────────────────────────────────────────────────────────────
+// ─── Center Team Row ───────────────────────────────────────────────────────────
 
-function FirstFourSection({ games, onTeamSelect, selectedTeam }) {
+function CenterTeamRow({ name, seed, isWinner, isSelected, onClick }) {
   return (
-    <div className="ff-section">
-      <div className="center-badge ff-badge">FIRST FOUR · Dayton, OH</div>
-      {games.map((game, i) => (
-        <div key={i} className="ff-game">
-          <span className="ff-seed">#{game.seed_a}</span>
-          <span className={`ff-team${game.winner === game.team_a ? ' won' : ' lost'}${game.team_a === selectedTeam ? ' selected' : ''}`}
-            onClick={() => onTeamSelect(game.team_a, game)}>{game.team_a}</span>
-          <span className="ff-vs">vs</span>
-          <span className={`ff-team${game.winner === game.team_b ? ' won' : ' lost'}${game.team_b === selectedTeam ? ' selected' : ''}`}
-            onClick={() => onTeamSelect(game.team_b, game)}>{game.team_b}</span>
-          <span className="ff-arrow">→ <strong>{game.winner}</strong></span>
-        </div>
-      ))}
+    <div
+      className={['cc-team-row', isWinner ? 'cc-winner' : '', isSelected ? 'cc-selected' : '', !name ? 'cc-tbd' : ''].filter(Boolean).join(' ')}
+      onClick={() => name && onClick(name)}
+    >
+      <span className="cc-seed">{seed != null ? seed : '—'}</span>
+      <span className="cc-name">{name || 'TBD'}</span>
+      {isWinner && name && <span className="cc-check">✓</span>}
     </div>
   )
 }
 
 // ─── Center Column ─────────────────────────────────────────────────────────────
 
-function CenterColumn({ bracketData, games, onTeamSelect, selectedTeam, mode, onPick, mcOdds }) {
-  const ffGames   = (bracketData.rounds?.['0']?.games || []).map(g => ({ ...g, round_num: 0 }))
-  const ffResults = games.filter(g => g.round_num === 5)
+function CenterColumn({ bracketData, games, onTeamSelect, selectedTeam, mode, pathTeam }) {
+  const picks  = mode === 'picks'
+  const useUserWinner = picks || !!pathTeam
+  const sel    = (name, game) => onTeamSelect(name, game)
+  const eff    = (g) => useUserWinner ? g.userWinner : g.winner
+
+  const e8Games   = games.filter(g => g.round_num === 4)
+  const ffGames   = games.filter(g => g.round_num === 5)
   const champ     = games.find(g => g.round_num === 6)
-  const picks     = mode === 'picks'
-  const winner    = picks ? champ?.userWinner : champ?.winner
+  const champWinner = champ ? eff(champ) : null
+
+  const teamsFrom = (gameList) =>
+    gameList.flatMap(g => [
+      { name: g.team_a, seed: g.seed_a, isWinner: eff(g) === g.team_a, game: g },
+      { name: g.team_b, seed: g.seed_b, isWinner: eff(g) === g.team_b, game: g },
+    ])
+
+  const e8Teams   = teamsFrom(e8Games)
+  const ffTeams   = teamsFrom(ffGames)
+  const champTeams = champ ? teamsFrom([champ]) : []
 
   return (
     <div className="center-col">
       <div className="ncaa-header">
-        <div className="ncaa-emblem">🏀</div>
-        <div className="ncaa-wordmark">2026 NCAA</div>
-        <div className="ncaa-subtitle">MEN'S BASKETBALL CHAMPIONSHIP</div>
+        <img src="/marchMadnessLogo.png" alt="March Madness" className="ncaa-logo" />
       </div>
 
-      {ffGames.length > 0 && (
-        <FirstFourSection games={ffGames} onTeamSelect={onTeamSelect} selectedTeam={selectedTeam} />
-      )}
+      <div className="cc-section">
+        <div className="cc-section-header cc-e8">
+          <span className="cc-header-label">Elite Eight</span>
+        </div>
+        <div className="cc-team-grid">
+          {e8Teams.map(({ name, seed, isWinner, game }) => (
+            <CenterTeamRow key={name ?? `tbd-e8-${seed}`} name={name} seed={seed}
+              isWinner={isWinner} isSelected={name === selectedTeam || name === pathTeam}
+              onClick={(n) => sel(n, game)} />
+          ))}
+        </div>
+      </div>
 
-      <div className="ff-results-section">
-        <div className="center-badge semifinal-badge">FINAL FOUR · Indianapolis</div>
-        {ffResults.map((game, i) => (
-          <Matchup key={i} game={game} onTeamSelect={onTeamSelect} selectedTeam={selectedTeam}
-                   roundNum={5} mode={mode} onPick={onPick} mcOdds={mcOdds} />
-        ))}
+      <div className="cc-section">
+        <div className="cc-section-header cc-ff">
+          <span className="cc-header-label">Final Four</span>
+          <span className="cc-header-venue">Indianapolis</span>
+        </div>
+        <div className="cc-team-list">
+          {ffTeams.map(({ name, seed, isWinner, game }) => (
+            <CenterTeamRow key={name ?? `tbd-ff-${seed}`} name={name} seed={seed}
+              isWinner={isWinner} isSelected={name === selectedTeam || name === pathTeam}
+              onClick={(n) => sel(n, game)} />
+          ))}
+        </div>
       </div>
 
       {champ && (
-        <div className="championship-section">
-          <div className="center-badge champ-badge">🏆 NATIONAL CHAMPIONSHIP</div>
-          <Matchup game={champ} onTeamSelect={onTeamSelect} selectedTeam={selectedTeam}
-                   roundNum={6} mode={mode} onPick={onPick} mcOdds={mcOdds} />
-          <div className={`champion-reveal${!winner ? ' pending' : ''}`}>
-            <div className="champion-label">{picks ? 'YOUR CHAMPION' : 'PREDICTED CHAMPION'}</div>
-            <div className="champion-name">{winner || 'TBD'}</div>
+        <div className="cc-section">
+          <div className="cc-section-header cc-champ">
+            <span className="cc-header-label">Championship</span>
+          </div>
+          <div className="cc-team-list">
+            {champTeams.map(({ name, seed, isWinner, game }) => (
+              <CenterTeamRow key={name ?? `tbd-champ-${seed}`} name={name} seed={seed}
+                isWinner={isWinner} isSelected={name === selectedTeam || name === pathTeam}
+                onClick={(n) => sel(n, game)} />
+            ))}
+          </div>
+          <div className={`champion-reveal${!champWinner ? ' pending' : ''}`}>
+            <div className="champion-label">
+              {pathTeam ? `${pathTeam} path` : picks ? 'Your Champion' : 'Predicted Champion'}
+            </div>
+            <div className="champion-name">{champWinner || 'TBD'}</div>
           </div>
         </div>
       )}
@@ -290,27 +416,28 @@ function CenterColumn({ bracketData, games, onTeamSelect, selectedTeam, mode, on
 // ─── Main Bracket ──────────────────────────────────────────────────────────────
 
 export default function Bracket({ bracketData, onTeamSelect, selectedTeam, selectedGame,
-                                  mode, userPicks, onPick, mcOdds }) {
+                                  mode, userPicks, onPick, mcOdds, pathTeam }) {
   if (!bracketData?.rounds) return <div className="loading">No bracket data</div>
 
   const allGames = mode === 'picks'
     ? derivePicksBracket(bracketData, userPicks || {})
-    : Object.entries(bracketData.rounds).flatMap(([rn, r]) =>
-        r.games.map(g => ({ ...g, round_num: parseInt(rn) }))
-      )
+    : pathTeam
+      ? derivePathBracket(bracketData, pathTeam)
+      : Object.entries(bracketData.rounds).flatMap(([rn, r]) =>
+          r.games.map(g => ({ ...g, round_num: parseInt(rn) }))
+        )
 
-  const shared = { onTeamSelect, selectedTeam, mode, onPick, mcOdds }
+  const shared = { onTeamSelect, selectedTeam, mode, onPick, mcOdds, pathTeam }
 
   return (
     <div className="bracket">
-      <div className="bracket-row">
+      <div className="bracket-left">
         <RegionBracket region="East"    games={allGames} {...shared} />
-        <CenterColumn  bracketData={bracketData} games={allGames} {...shared} />
-        <RegionBracket region="West"    games={allGames} {...shared} reverse />
-      </div>
-      <div className="bracket-row">
         <RegionBracket region="South"   games={allGames} {...shared} />
-        <div className="center-spacer" />
+      </div>
+      <CenterColumn bracketData={bracketData} games={allGames} {...shared} />
+      <div className="bracket-right">
+        <RegionBracket region="West"    games={allGames} {...shared} reverse />
         <RegionBracket region="Midwest" games={allGames} {...shared} reverse />
       </div>
     </div>

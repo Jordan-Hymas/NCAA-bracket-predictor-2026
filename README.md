@@ -6,19 +6,23 @@ AI-powered 2026 NCAA Men's Basketball Tournament bracket predictor — full pred
 
 ## How the Predictions Work
 
-Every game prediction combines five layers of evidence. The model converts each signal to a probability in logit space, weights them, then produces a final win probability via sigmoid.
+Every game prediction combines 12 layers of evidence. The model converts each signal to a probability in logit space, weights them, then produces a final win probability via sigmoid.
 
 ### Signal Layers (in priority order)
 
 | Weight | Signal | How it's used |
 |---|---|---|
 | **32%** | Head-to-head results | Did A beat B this season? Win/margin at neutral-adjusted site. If yes, this dominates. |
-| **22%** | Common opponents | Both teams played team C — compare their neutral-adjusted margins, weighted by opponent strength (OpponentSRS). |
-| **18%** | Net efficiency rating | Season-long points scored minus allowed per 100 possessions, adjusted for opponents. |
-| **9%** | Strength of schedule | Average quality of every opponent faced. Prevents inflated mid-major stats. |
+| **20%** | Common opponents | Both teams played team C — compare their neutral-adjusted margins, weighted by opponent strength (OpponentSRS). |
+| **15%** | Net efficiency rating | Season-long points scored minus allowed per 100 possessions, adjusted for opponents. |
+| **7%** | Strength of schedule | Average quality of every opponent faced. Prevents inflated mid-major stats. |
 | **5%** | Celebrity consensus | 9 ESPN/media experts — per-matchup vote + agreement ratio. |
-| **8%** | ORtg / DRtg / Luck | Offensive/defensive splits and regression signal (lucky teams are penalized). |
-| **4%** | Tempo | Pace mismatch adjustment. |
+| **4%** | Non-conference SOS | Quality of opponents outside the conference — strongest cross-regional quality signal for tournament comparisons. |
+| **4%** | Offensive rating | Points scored per 100 possessions. |
+| **4%** | Defensive rating | Points allowed per 100 possessions (lower = better). |
+| **3%** | Luck | How much the W-L record exceeds efficiency prediction. Lucky teams are penalized (regression to mean). |
+| **3%** | Win percentage | Winning rate independent of efficiency — tournament-tested teams. |
+| **1%** | Tempo | Pace mismatch adjustment. |
 | **2%** | Seed prior | 40 years of empirical seed-matchup win rates (1985–2024). Weakest signal — only matters when everything else is even. |
 
 ### Key Stats Explained
@@ -42,6 +46,10 @@ Every game in the season logs is adjusted to a neutral-site equivalent before co
 
 This means Duke beating Michigan by 5 at a neutral site is worth more than beating them by 9 at home.
 
+### Monte Carlo Simulation
+
+To estimate championship odds, the model runs 100 simulations with Gaussian noise (σ=0.7 logits) added to each game's logit score. This randomness models real-world variance — upsets, hot shooting nights, bracket luck. The champion odds reflect how often each team wins across all 100 simulated tournaments.
+
 ---
 
 ## Data Sources
@@ -60,22 +68,50 @@ Dick Vitale · Jay Bilas · Hannah Storm · Eric Moody · Jay Harris · Jon Cris
 
 ## 2026 Predictions
 
+### Monte Carlo Championship Odds (100 simulations)
+
+| Rank | Team | Title % | Final Four % |
+|---|---|---|---|
+| 1 | **Duke** | **44%** | ~85% |
+| 2 | **Michigan** | **25%** | ~60% |
+| 3 | **Arizona** | **22%** | ~55% |
+| 4 | **Florida** | **4%** | ~25% |
+| 5 | **Houston** | **2%** | ~15% |
+
+### Deterministic Prediction (most likely bracket)
+
 | Round | Prediction | Key factor |
 |---|---|---|
-| **National Champion** | **Duke** | Beat Michigan 68–63 at neutral site (Feb 21) |
-| **Final Four** | Duke, Arizona, Florida, Michigan | All have top-5 NetRtg + strong H2H records |
-| **Elite Eight** | Duke, UConn, Arizona, Purdue, Florida, Illinois, Michigan, Iowa St. | |
+| **National Champion** | **Duke** | Beat Michigan 68–63 at neutral site (Feb 21) + best NetRtg in field (38.9) |
+| **Final Four** | Duke, Arizona, Michigan, Florida | All top-5 NetRtg + strong H2H records |
+| **Elite Eight** | Duke, Arizona, Florida, Michigan + 4 others | |
+
+> Duke is the model's top pick despite experts slightly favoring Michigan, because Duke's direct H2H win carries 32% of the prediction weight — the strongest single signal in the model.
 
 ### Celebrity Champion Consensus
 | Team | Expert picks |
 |---|---|
 | Michigan | 3 / 9 (Moody, Harris, Crispin) |
 | Arizona | 3 / 9 (Storm, Bilas, Negandhi) |
-| Florida | 2 / 9 (Vitale, Murphy via different path) |
-| Duke | 1 / 9 (Phil Murphy) |
-| Miami (FL) | 1 / 9 (Mike Clay) |
+| Florida | 2 / 9 (Vitale, Murphy) |
+| Duke | 1 / 9 (Phil Murphy via different path) |
 
-> The model picks Duke over Michigan in the championship despite experts favoring Michigan 8/9, because Duke's direct H2H win carries 32% of the prediction weight — the strongest single signal in the model.
+---
+
+## Web App Features
+
+The interactive bracket app has two modes:
+
+### AI Picks Mode
+- Full predicted bracket with game-by-game win probabilities and confidence ratings
+- **Top 5 Title Contenders** panel — ranked by Monte Carlo championship odds with probability bars
+- **Path Bracket** — click any top-5 team to see their full projected path to the title. The bracket updates to show that team winning their games; all other games fall back to AI predictions.
+- Center column shows Elite Eight, Final Four, and predicted champion
+
+### My Picks Mode
+- Fill out your own bracket by clicking team names to advance them
+- Monte Carlo championship odds shown per team as you pick
+- Score tracker: how many of your picks match the AI model
 
 ---
 
@@ -93,14 +129,15 @@ NCAA-bracket-predictor/
 │   │   └── games/                       ← optional: additional game CSVs
 │   └── processed/                       ← generated outputs (gitignored)
 │       ├── simulation_results.csv
-│       └── predicted_bracket.json
+│       ├── predicted_bracket.json
+│       └── mc_odds.json                 ← Monte Carlo championship odds (cached)
 ├── src/
 │   ├── collectors/
 │   │   ├── bracket_collector.py         ← loads 68-team stats CSV
 │   │   ├── season_results.py            ← H2H + common opponent engine
 │   │   └── celebrity_brackets.py        ← loads + normalizes all expert picks
 │   ├── models/
-│   │   └── predictor.py                 ← weighted logit prediction model
+│   │   └── predictor.py                 ← 12-signal weighted logit prediction model
 │   ├── bracket/
 │   │   └── simulator.py                 ← simulates all 67 games
 │   └── utils/
@@ -110,16 +147,14 @@ NCAA-bracket-predictor/
 │   └── 02_simulate_bracket.py           ← run full simulation + print results
 ├── web/
 │   ├── backend/
-│   │   └── app.py                       ← FastAPI server
+│   │   └── app.py                       ← FastAPI server (pre-computes MC at startup)
 │   └── frontend/                        ← React + Vite bracket UI
 │       └── src/
 │           ├── components/
-│           │   ├── Bracket.jsx          ← full interactive bracket
+│           │   ├── Bracket.jsx          ← full interactive bracket + path mode
 │           │   ├── Header.jsx           ← champion + Final Four banner
-│           │   └── Sidebar.jsx          ← team stats + predictions + celebrity
+│           │   └── Sidebar.jsx          ← team stats + Top 5 Contenders
 │           └── App.jsx
-├── bracket/
-│   └── 2026_March_Madness_bracket.pdf  ← reference layout
 ├── requirements.txt
 └── start.sh
 ```
@@ -149,6 +184,8 @@ cd web/frontend && npm install && cd ../..
 ./start.sh --prod
 ```
 
+The backend pre-computes Monte Carlo odds at startup (or loads from disk cache if available). First startup after clearing the cache takes ~15 seconds; subsequent starts are instant.
+
 ### Run simulation manually
 ```bash
 .venv/bin/python scripts/02_simulate_bracket.py
@@ -164,6 +201,8 @@ Outputs: `data/processed/simulation_results.csv` and `data/processed/predicted_b
 | `/api/bracket` | GET | Full bracket JSON — all 67 game predictions with factors |
 | `/api/teams` | GET | All 68 teams with efficiency stats |
 | `/api/celebrity` | GET | Expert bracket summary, champion votes, Final Four votes |
+| `/api/monte-carlo` | GET | Championship/Final Four/Elite Eight odds from 100 simulations (cached) |
+| `/api/monte-carlo?refresh=true` | GET | Force recompute Monte Carlo odds |
 | `/api/simulate` | GET | Re-run simulation, refresh `predicted_bracket.json` |
 
 ---

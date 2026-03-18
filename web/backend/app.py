@@ -14,6 +14,7 @@ Endpoints:
 import json
 import os
 import sys
+import threading
 from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException
@@ -33,6 +34,7 @@ from src.bracket.simulator import BracketSimulator
 # Module-level singletons so we don't reload on every request
 _season_results: SeasonResults | None = None
 _celebrity_brackets: CelebrityBrackets | None = None
+_mc_cache: dict | None = None
 
 
 def _get_season_results() -> SeasonResults:
@@ -50,6 +52,59 @@ def _get_celebrity_brackets() -> CelebrityBrackets:
 
 app = FastAPI(title="NCAA Bracket Predictor 2026", version="1.0.0")
 
+
+def _run_mc(n: int = 100) -> dict:
+    """Compute MC simulations and return result dict."""
+    collector = BracketCollector()
+    teams     = collector.load_bracket()
+    season    = _get_season_results()
+    cb        = _get_celebrity_brackets()
+    champ_counts: dict = defaultdict(int)
+    ff_counts:    dict = defaultdict(int)
+    e8_counts:    dict = defaultdict(int)
+    for _ in range(n):
+        sim = BracketSimulator(teams, season_results=season, celebrity_brackets=cb, noise_std=0.7)
+        sim.simulate()
+        df  = sim.to_dataframe()
+        champ_counts[df[df["round_num"] == 6].iloc[0]["winner"]] += 1
+        for t in df[df["round_num"] == 5]["winner"].tolist(): ff_counts[t] += 1
+        for t in df[df["round_num"] == 4]["winner"].tolist(): e8_counts[t] += 1
+    all_teams = teams["Team"].tolist()
+    return {
+        "n": n,
+        "champion":    {t: round(champ_counts.get(t, 0) / n, 4) for t in all_teams},
+        "final_four":  {t: round(ff_counts.get(t, 0)   / n, 4) for t in all_teams},
+        "elite_eight": {t: round(e8_counts.get(t, 0)   / n, 4) for t in all_teams},
+    }
+
+
+def _load_or_compute_mc(n: int = 100) -> dict:
+    """Return MC odds from disk cache if available, else compute and save."""
+    global _mc_cache
+    if _mc_cache is not None:
+        return _mc_cache
+    if os.path.exists(MC_JSON_PATH):
+        print("[MC] Loading from disk cache...")
+        with open(MC_JSON_PATH) as f:
+            _mc_cache = json.load(f)
+        print("[MC] Loaded.")
+        return _mc_cache
+    print(f"[MC] Computing {n} simulations (this runs once and is cached)...")
+    result = _run_mc(n)
+    os.makedirs("data/processed", exist_ok=True)
+    with open(MC_JSON_PATH, "w") as f:
+        json.dump(result, f)
+    _mc_cache = result
+    print("[MC] Done — saved to disk.")
+    return _mc_cache
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Pre-load MC odds at startup (from disk if cached, else compute in background)."""
+    threading.Thread(target=_load_or_compute_mc, daemon=True).start()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,6 +113,7 @@ app.add_middleware(
 )
 
 BRACKET_JSON_PATH = "data/processed/predicted_bracket.json"
+MC_JSON_PATH      = "data/processed/mc_odds.json"
 
 
 # ---------------------------------------------------------------------------
@@ -138,36 +194,14 @@ def get_celebrity():
 
 
 @app.get("/api/monte-carlo")
-def monte_carlo(n: int = 200):
-    """Run N simulations with Gaussian noise; return championship/FF/E8 odds per team."""
-    collector = BracketCollector()
-    teams = collector.load_bracket()
-    season = _get_season_results()
-    cb = _get_celebrity_brackets()
-
-    champ_counts: dict = defaultdict(int)
-    ff_counts:    dict = defaultdict(int)
-    e8_counts:    dict = defaultdict(int)
-
-    for _ in range(n):
-        sim = BracketSimulator(teams, season_results=season, celebrity_brackets=cb, noise_std=0.7)
-        sim.simulate()
-        df = sim.to_dataframe()
-
-        champ = df[df["round_num"] == 6].iloc[0]["winner"]
-        champ_counts[champ] += 1
-        for t in df[df["round_num"] == 5]["winner"].tolist():
-            ff_counts[t] += 1
-        for t in df[df["round_num"] == 4]["winner"].tolist():
-            e8_counts[t] += 1
-
-    all_teams = teams["Team"].tolist()
-    return {
-        "n": n,
-        "champion":    {t: round(champ_counts.get(t, 0) / n, 4) for t in all_teams},
-        "final_four":  {t: round(ff_counts.get(t, 0)   / n, 4) for t in all_teams},
-        "elite_eight": {t: round(e8_counts.get(t, 0)   / n, 4) for t in all_teams},
-    }
+def monte_carlo(n: int = 100, refresh: bool = False):
+    """Return MC championship/FF/E8 odds. Results are cached to disk after first run."""
+    global _mc_cache
+    if refresh:
+        _mc_cache = None
+        if os.path.exists(MC_JSON_PATH):
+            os.remove(MC_JSON_PATH)
+    return _load_or_compute_mc(n)
 
 
 @app.get("/api/simulate")

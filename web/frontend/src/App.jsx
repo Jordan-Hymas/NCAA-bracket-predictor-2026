@@ -16,19 +16,27 @@ export default function App() {
   const [userPicks, setUserPicks]     = useState({})
   const [mcOdds, setMcOdds]           = useState(null)
   const [mcLoading, setMcLoading]     = useState(false)
+  const [pathTeam, setPathTeam]       = useState(null)
 
   useEffect(() => {
+    // Load bracket and MC odds together on startup
     fetch(`${API}/api/bracket`)
       .then(r => r.json())
       .then(data => { setBracketData(data); setLoading(false) })
       .catch(e  => { setError(e.message);   setLoading(false) })
+
+    setMcLoading(true)
+    fetch(`${API}/api/monte-carlo?n=100`)
+      .then(r => r.json())
+      .then(data => { setMcOdds(data); setMcLoading(false) })
+      .catch(e  => { console.warn('MC unavailable:', e); setMcLoading(false) })
   }, [])
 
   const fetchMcOdds = useCallback(async () => {
     if (mcOdds || mcLoading) return
     setMcLoading(true)
     try {
-      const res  = await fetch(`${API}/api/monte-carlo?n=200`)
+      const res  = await fetch(`${API}/api/monte-carlo?n=100`)
       const data = await res.json()
       setMcOdds(data)
     } catch (e) {
@@ -56,6 +64,10 @@ export default function App() {
   const handleTeamSelect = useCallback((team, game) => {
     setSelectedTeam(t => t === team ? null : team)
     if (game !== undefined) setSelectedGame(game)
+  }, [])
+
+  const handlePathTeam = useCallback((team) => {
+    setPathTeam(t => t === team ? null : team)
   }, [])
 
   if (loading) return <div className="loading">Loading 2026 NCAA Tournament Bracket…</div>
@@ -87,6 +99,7 @@ export default function App() {
             userPicks={userPicks}
             onPick={handlePick}
             mcOdds={mcOdds}
+            pathTeam={pathTeam}
           />
         </div>
         <Sidebar
@@ -96,6 +109,9 @@ export default function App() {
           mcOdds={mcOdds}
           mcLoading={mcLoading}
           apiBase={API}
+          pathTeam={pathTeam}
+          onPathTeam={handlePathTeam}
+          onFetchMc={fetchMcOdds}
         />
       </div>
     </div>

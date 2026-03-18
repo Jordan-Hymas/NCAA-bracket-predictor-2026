@@ -195,7 +195,7 @@ function MCOddsRow({ teamA, teamB, mcOdds }) {
           <div className="mc-name">{teamA}</div>
           <div className="mc-stat">🏆 {champA}%  · FF {ffA}%</div>
         </div>
-        <div className="mc-vs">200 sims</div>
+        <div className="mc-vs">100 sims</div>
         <div className="mc-team-col right">
           <div className="mc-name">{teamB}</div>
           <div className="mc-stat">{champB}% 🏆  · {ffB}% FF</div>
@@ -242,7 +242,7 @@ function MatchupAnalysis({ game, bracketData, mcOdds }) {
       {mcOdds && (
         <>
           <h4 className="ma-section-title">Monte Carlo Odds</h4>
-          <p className="ma-section-sub">200 simulations with model noise</p>
+          <p className="ma-section-sub">100 simulations with model noise</p>
           <MCOddsRow teamA={team_a} teamB={team_b} mcOdds={mcOdds} />
         </>
       )}
@@ -250,10 +250,80 @@ function MatchupAnalysis({ game, bracketData, mcOdds }) {
   )
 }
 
+// ─── Top 5 Contenders ─────────────────────────────────────────────────────────
+
+const RANK_COLORS = ['#f0883e', '#79c0ff', '#3fb950', '#a5a5a5', '#c084fc']
+
+function Top5Contenders({ mcOdds, pathTeam, onPathTeam, bracketData }) {
+  if (!mcOdds) return <p className="hint">Loading simulation odds…</p>
+
+  const top5 = Object.entries(mcOdds.champion)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5)
+
+  const maxProb = top5[0]?.[1] || 1
+
+  return (
+    <div className="top5-container">
+      <div className="top5-instructions">
+        Click a team to highlight their path on the bracket
+      </div>
+      {top5.map(([team, prob], i) => {
+        const teamObj  = bracketData?.teams?.find(t => t.Team === team)
+        const ffOdds   = mcOdds.final_four?.[team] || 0
+        const isActive = pathTeam === team
+        const barPct   = (prob / maxProb) * 100
+
+        return (
+          <div
+            key={team}
+            className={`top5-card${isActive ? ' top5-active' : ''}`}
+            style={{ '--rank-color': RANK_COLORS[i] }}
+            onClick={() => onPathTeam(team)}
+          >
+            <div className="top5-rank-badge" style={{ background: RANK_COLORS[i] }}>
+              #{i + 1}
+            </div>
+            <div className="top5-body">
+              <div className="top5-header-row">
+                <span className="top5-name">{team}</span>
+                <span className="top5-pct" style={{ color: RANK_COLORS[i] }}>
+                  {(prob * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="top5-sub">
+                {teamObj && <span className="top5-conf">#{teamObj.Seed} {teamObj.Conf}</span>}
+                <span className="top5-ff">FF: {(ffOdds * 100).toFixed(0)}%</span>
+              </div>
+              <div className="top5-bar-track">
+                <div
+                  className="top5-bar-fill"
+                  style={{ width: `${barPct}%`, background: RANK_COLORS[i] }}
+                />
+              </div>
+            </div>
+            {isActive && <div className="top5-active-dot" />}
+          </div>
+        )
+      })}
+      {pathTeam && (
+        <button className="top5-clear" onClick={() => onPathTeam(pathTeam)}>
+          Clear path highlight
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Sidebar ─────────────────────────────────────────────────────────────
 
-export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdds, mcLoading, apiBase }) {
+export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdds, mcLoading, apiBase, pathTeam, onPathTeam, onFetchMc }) {
   const [tab, setTab] = useState('analysis')
+
+  const switchTab = (id) => {
+    setTab(id)
+    if (id === 'picks' && !mcOdds && !mcLoading) onFetchMc?.()
+  }
 
   const teamObj  = bracketData?.teams?.find(t => t.Team === selectedTeam)
   const champion = bracketData?.rounds?.['6']?.games?.[0]?.winner
@@ -276,7 +346,7 @@ export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdd
     <aside className="sidebar">
       <div className="tabs">
         {TABS.map(t => (
-          <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => switchTab(t.id)}>
             {t.label}
           </button>
         ))}
@@ -285,7 +355,7 @@ export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdd
       {tab === 'analysis' && (
         <div className="tab-content">
           {mcLoading && !selectedGame && (
-            <p className="hint">⏳ Computing Monte Carlo odds (200 simulations)…</p>
+            <p className="hint">⏳ Computing Monte Carlo odds…</p>
           )}
           <MatchupAnalysis game={selectedGame} bracketData={bracketData} mcOdds={mcOdds} />
         </div>
@@ -302,10 +372,21 @@ export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdd
 
       {tab === 'picks' && (
         <div className="tab-content">
-          <h3 className="section-title">🏆 AI Champion</h3>
+          <h3 className="section-title">AI Champion</h3>
           <div className="champion-box">{champion}</div>
 
-          <h3 className="section-title">Final Four</h3>
+          <h3 className="section-title">Top 5 Title Contenders</h3>
+          {mcLoading
+            ? <p className="hint" style={{ marginTop: 8 }}>⏳ Running 100 simulations…</p>
+            : <Top5Contenders
+                mcOdds={mcOdds}
+                pathTeam={pathTeam}
+                onPathTeam={onPathTeam}
+                bracketData={bracketData}
+              />
+          }
+
+          <h3 className="section-title" style={{ marginTop: 16 }}>Final Four</h3>
           {ff.map(({ team, won }) => (
             <div key={team} className={`round-pick ${won ? 'winner' : 'loser'}`}>{team}</div>
           ))}
@@ -314,25 +395,6 @@ export default function Sidebar({ bracketData, selectedTeam, selectedGame, mcOdd
           {e8.map(({ team, won }) => (
             <div key={team} className={`round-pick ${won ? 'winner' : 'loser'}`}>{team}</div>
           ))}
-
-          {mcOdds && (
-            <>
-              <h3 className="section-title">Championship Odds (200 sims)</h3>
-              {Object.entries(mcOdds.champion)
-                .filter(([, p]) => p > 0.01)
-                .sort(([, a], [, b]) => b - a)
-                .map(([team, prob]) => (
-                  <div key={team} className="mc-list-row">
-                    <span className="mc-list-name">{team}</span>
-                    <div className="mc-list-bar">
-                      <div className="mc-list-fill" style={{ width: `${(prob * 100).toFixed(0)}%` }} />
-                    </div>
-                    <span className="mc-list-pct">{(prob * 100).toFixed(1)}%</span>
-                  </div>
-                ))
-              }
-            </>
-          )}
         </div>
       )}
     </aside>

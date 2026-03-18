@@ -16,6 +16,9 @@ if [[ "$1" == "--prod" ]]; then
   echo "Starting server at http://localhost:8000"
   cd "$ROOT" && "$VENV/python" -m uvicorn web.backend.app:app --host 0.0.0.0 --port 8000
 else
+  # Kill anything already on ports 8000 / 5173
+  lsof -ti:8000 | xargs kill -9 2>/dev/null; true
+  lsof -ti:5173 | xargs kill -9 2>/dev/null; true
   echo "Starting API server on :8000 ..."
   cd "$ROOT" && "$VENV/python" -m uvicorn web.backend.app:app --host 0.0.0.0 --port 8000 --reload &
   API_PID=$!

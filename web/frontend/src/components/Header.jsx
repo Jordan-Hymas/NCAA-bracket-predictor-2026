@@ -8,7 +8,7 @@ export default function Header({ bracketData, mode, onModeChange, userPicks, onR
   return (
     <header className="header">
       <div className="header-left">
-        <span className="header-logo">🏀</span>
+        <img src="/marchMadnessLogo.png" alt="March Madness" className="header-logo" />
         <div>
           <h1 className="header-title">2026 NCAA Tournament Predictor</h1>
           <p className="header-sub">AI predictions · H2H analytics · Expert consensus</p>

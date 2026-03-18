@@ -42,12 +42,14 @@ SEED_WIN_RATES: dict[tuple[int, int], float] = {
 # ---------------------------------------------------------------------------
 W = {
     "h2h":        0.32,  # direct H2H result this season
-    "common_opp": 0.22,  # common opponent margin differential
-    "net_rtg":    0.18,  # season net efficiency rating
-    "sos":        0.09,  # strength of schedule
+    "common_opp": 0.20,  # common opponent margin differential
+    "net_rtg":    0.15,  # season net efficiency rating
+    "sos":        0.07,  # strength of schedule (in-conference + OOC combined)
+    "ncsos":      0.04,  # non-conference SOS (cross-conference quality signal)
     "off_rtg":    0.04,  # offensive rating
     "def_rtg":    0.04,  # defensive rating (inverted)
     "luck":       0.03,  # luck (negative signal — regress lucky teams)
+    "win_pct":    0.03,  # win percentage (tournament-readiness, independent of efficiency)
     "tempo":      0.01,  # pace mismatch
     "celebrity":  0.05,  # per-matchup expert consensus
     "seed":       0.02,  # historical seed prior (weak in stat-rich model)
@@ -115,12 +117,20 @@ class GamePredictor:
             co_diff = _logit(0.5 + max(-0.45, min(0.45, co_raw / 30)))
 
         # ── 3. Efficiency stats ───────────────────────────────────────
-        d_net   = team_a["NetRtg"]     - team_b["NetRtg"]
-        d_off   = team_a["ORtg"]       - team_b["ORtg"]
-        d_def   = -(team_a["DRtg"]    - team_b["DRtg"])   # lower = better
-        d_sos   = team_a["SOS_NetRtg"] - team_b["SOS_NetRtg"]
-        d_luck  = team_a["Luck"]       - team_b["Luck"]
-        d_tempo = team_a["AdjT"]       - team_b["AdjT"]
+        d_net   = team_a["NetRtg"]      - team_b["NetRtg"]
+        d_off   = team_a["ORtg"]        - team_b["ORtg"]
+        d_def   = -(team_a["DRtg"]     - team_b["DRtg"])   # lower = better
+        d_sos   = team_a["SOS_NetRtg"]  - team_b["SOS_NetRtg"]
+        d_ncsos = team_a["NCSOS_NetRtg"] - team_b["NCSOS_NetRtg"]
+        d_luck  = team_a["Luck"]        - team_b["Luck"]
+        d_tempo = team_a["AdjT"]        - team_b["AdjT"]
+
+        # Win percentage (independent tournament-readiness signal)
+        wa, la = float(team_a.get("Wins", 0)), float(team_a.get("Losses", 0))
+        wb, lb = float(team_b.get("Wins", 0)), float(team_b.get("Losses", 0))
+        wp_a = wa / (wa + la) if (wa + la) > 0 else 0.5
+        wp_b = wb / (wb + lb) if (wb + lb) > 0 else 0.5
+        wp_logit = _logit(0.5 + max(-0.45, min(0.45, (wp_a - wp_b) * 1.5)))
 
         # ── 4. Celebrity consensus ────────────────────────────────────
         celeb_logit = 0.0
@@ -136,15 +146,17 @@ class GamePredictor:
 
         # ── Weighted sum ──────────────────────────────────────────────
         score = (
-            W["h2h"]        * h2h_score  * 3.0   +
-            W["common_opp"] * co_diff            +
-            W["net_rtg"]    * d_net      * 0.22  +
-            W["sos"]        * d_sos      * 0.30  +
-            W["off_rtg"]    * d_off      * 0.18  +
-            W["def_rtg"]    * d_def      * 0.18  +
-            W["luck"]       * (-d_luck)  * 0.80  +
-            W["tempo"]      * d_tempo    * 0.04  +
-            W["celebrity"]  * celeb_logit        +
+            W["h2h"]        * h2h_score   * 3.0   +
+            W["common_opp"] * co_diff              +
+            W["net_rtg"]    * d_net        * 0.22  +
+            W["sos"]        * d_sos        * 0.30  +
+            W["ncsos"]      * d_ncsos      * 0.30  +
+            W["off_rtg"]    * d_off        * 0.18  +
+            W["def_rtg"]    * d_def        * 0.18  +
+            W["luck"]       * (-d_luck)    * 0.80  +
+            W["win_pct"]    * wp_logit              +
+            W["tempo"]      * d_tempo      * 0.04  +
+            W["celebrity"]  * celeb_logit           +
             W["seed"]       * seed_logit
         )
 
@@ -171,6 +183,9 @@ class GamePredictor:
                                          if self.sr else 0, 2),
                 "net_rtg_diff":     round(d_net, 2),
                 "sos_diff":         round(d_sos, 2),
+                "ncsos_diff":       round(d_ncsos, 2),
+                "win_pct_a":        round(wp_a, 3),
+                "win_pct_b":        round(wp_b, 3),
                 "seed_prior":       round(seed_p, 3),
                 "celebrity_pick":   celebrity_pick,
                 "celebrity_agree":  round(celebrity_agreement, 2),
