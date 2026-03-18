@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Node / Frontend
+web/frontend/node_modules/
+web/frontend/dist/
+
+# Generated / processed data (reproducible from scripts)
+data/processed/
+
+# Celebrity brackets are user data — commit intentionally if desired
+# data/raw/celebrity_brackets/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
