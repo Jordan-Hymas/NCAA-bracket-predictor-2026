@@ -54,11 +54,13 @@ class BracketSimulator:
         teams_df: pd.DataFrame,
         season_results: Optional["SeasonResults"] = None,
         celebrity_brackets: Optional["CelebrityBrackets"] = None,
+        noise_std: float = 0.0,
     ):
         self.teams = teams_df.set_index("Team")
         self.predictor = GamePredictor(
             season_results=season_results,
             teams_df=teams_df,
+            noise_std=noise_std,
         )
         self.cb = celebrity_brackets   # CelebrityBrackets instance
         self.results: list[dict] = []

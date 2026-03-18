@@ -14,6 +14,7 @@ Endpoints:
 import json
 import os
 import sys
+from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +98,7 @@ def _run_simulation() -> dict:
                 "region":     row["region"],
                 "seed_a":     seed_a,
                 "seed_b":     seed_b,
+                "factors":    row["factors"],
             })
         rounds[str(rn)] = {"round_name": round_name, "games": games}
 
@@ -132,6 +134,39 @@ def get_celebrity():
         "champion_votes":   dict(cb.champion_votes),
         "final_four_votes": dict(cb.final_four_votes),
         "elite_eight_votes":dict(cb.elite_eight_votes),
+    }
+
+
+@app.get("/api/monte-carlo")
+def monte_carlo(n: int = 200):
+    """Run N simulations with Gaussian noise; return championship/FF/E8 odds per team."""
+    collector = BracketCollector()
+    teams = collector.load_bracket()
+    season = _get_season_results()
+    cb = _get_celebrity_brackets()
+
+    champ_counts: dict = defaultdict(int)
+    ff_counts:    dict = defaultdict(int)
+    e8_counts:    dict = defaultdict(int)
+
+    for _ in range(n):
+        sim = BracketSimulator(teams, season_results=season, celebrity_brackets=cb, noise_std=0.7)
+        sim.simulate()
+        df = sim.to_dataframe()
+
+        champ = df[df["round_num"] == 6].iloc[0]["winner"]
+        champ_counts[champ] += 1
+        for t in df[df["round_num"] == 5]["winner"].tolist():
+            ff_counts[t] += 1
+        for t in df[df["round_num"] == 4]["winner"].tolist():
+            e8_counts[t] += 1
+
+    all_teams = teams["Team"].tolist()
+    return {
+        "n": n,
+        "champion":    {t: round(champ_counts.get(t, 0) / n, 4) for t in all_teams},
+        "final_four":  {t: round(ff_counts.get(t, 0)   / n, 4) for t in all_teams},
+        "elite_eight": {t: round(e8_counts.get(t, 0)   / n, 4) for t in all_teams},
     }
 
 

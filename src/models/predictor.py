@@ -16,6 +16,7 @@ then passed through sigmoid to produce P(team_a wins).
 from __future__ import annotations
 
 import math
+import random
 from typing import Optional, TYPE_CHECKING
 
 import pandas as pd
@@ -73,9 +74,12 @@ class GamePredictor:
         self,
         season_results: Optional["SeasonResults"] = None,
         teams_df: Optional[pd.DataFrame] = None,
+        noise_std: float = 0.0,
     ):
         self.sr = season_results
         self.teams_df = teams_df
+        self.noise_std = noise_std
+        self._cache: dict = {}   # base score cache for fast MC re-use
 
     def predict(
         self,
@@ -143,6 +147,10 @@ class GamePredictor:
             W["celebrity"]  * celeb_logit        +
             W["seed"]       * seed_logit
         )
+
+        # Add Gaussian noise for Monte Carlo simulations
+        if self.noise_std:
+            score += random.gauss(0, self.noise_std)
 
         win_prob_a = _sigmoid(score)
         winner     = name_a if win_prob_a >= 0.5 else name_b
