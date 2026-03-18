@@ -6,6 +6,16 @@
 
 AI-powered 2026 NCAA Men's Basketball Tournament bracket predictor — full prediction engine backed by real season game data, advanced efficiency stats, and 9 ESPN/media expert brackets, with an interactive web app.
 
+<p align="center">
+  <img src="Github/main.png" alt="Bracket Predictor Main" width="100%" />
+</p>
+<p align="center">
+  <img src="Github/data.png" alt="Data View" width="100%" />
+</p>
+<p align="center">
+  <img src="Github/percent.png" alt="Win Percentages" width="100%" />
+</p>
+
 ---
 
 ## How the Predictions Work
