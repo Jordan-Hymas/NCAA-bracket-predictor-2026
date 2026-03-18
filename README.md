@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icons/marchMadnessLogo.png" alt="March Madness 2026" width="320" />
+</p>
+
 # NCAA Bracket Predictor 2026
 
 AI-powered 2026 NCAA Men's Basketball Tournament bracket predictor — full prediction engine backed by real season game data, advanced efficiency stats, and 9 ESPN/media expert brackets, with an interactive web app.
