@@ -29,6 +29,24 @@ from src.collectors.celebrity_brackets import CelebrityBrackets
 from src.collectors.season_results import SeasonResults
 from src.bracket.simulator import BracketSimulator
 
+# Module-level singletons so we don't reload on every request
+_season_results: SeasonResults | None = None
+_celebrity_brackets: CelebrityBrackets | None = None
+
+
+def _get_season_results() -> SeasonResults:
+    global _season_results
+    if _season_results is None:
+        _season_results = SeasonResults()
+    return _season_results
+
+
+def _get_celebrity_brackets() -> CelebrityBrackets:
+    global _celebrity_brackets
+    if _celebrity_brackets is None:
+        _celebrity_brackets = CelebrityBrackets()
+    return _celebrity_brackets
+
 app = FastAPI(title="NCAA Bracket Predictor 2026", version="1.0.0")
 
 app.add_middleware(
@@ -55,10 +73,9 @@ def _load_bracket_json() -> dict:
 def _run_simulation() -> dict:
     collector = BracketCollector()
     teams = collector.load_bracket()
-    cb = CelebrityBrackets()
-    consensus = cb.get_consensus_picks()
-    season = SeasonResults()
-    sim = BracketSimulator(teams, celebrity_picks=consensus, season_results=season)
+    season = _get_season_results()
+    cb = _get_celebrity_brackets()
+    sim = BracketSimulator(teams, season_results=season, celebrity_brackets=cb)
     sim.simulate()
     df = sim.to_dataframe()
 
@@ -108,37 +125,20 @@ def get_teams():
 
 @app.get("/api/celebrity")
 def get_celebrity():
-    cb = CelebrityBrackets()
+    cb = _get_celebrity_brackets()
     return {
-        "count": len(cb.brackets),
-        "brackets": cb.brackets,
-        "champion_votes": dict(cb.get_champion_votes()),
-        "final_four_votes": dict(cb.get_final_four_votes()),
+        "count":            len(cb.celebrities),
+        "experts":          cb.celebrities,
+        "champion_votes":   dict(cb.champion_votes),
+        "final_four_votes": dict(cb.final_four_votes),
+        "elite_eight_votes":dict(cb.elite_eight_votes),
     }
-
-
-class CelebrityBracketInput(BaseModel):
-    name: str
-    champion: str
-    final_four: list[str]
-    elite_eight: list[str] = []
-
-
-@app.post("/api/celebrity")
-def add_celebrity(bracket: CelebrityBracketInput):
-    cb = CelebrityBrackets()
-    cb.add_bracket(bracket.name, {
-        "champion": bracket.champion,
-        "final_four": bracket.final_four,
-        "elite_eight": bracket.elite_eight,
-    })
-    # Re-run simulation with updated celebrity data
-    _run_simulation()
-    return {"status": "ok", "message": f"Added bracket for {bracket.name}"}
 
 
 @app.get("/api/simulate")
 def resimulate():
+    global _celebrity_brackets
+    _celebrity_brackets = None  # force reload
     result = _run_simulation()
     games = sum(len(r["games"]) for r in result["rounds"].values())
     return {"status": "ok", "games_simulated": games}

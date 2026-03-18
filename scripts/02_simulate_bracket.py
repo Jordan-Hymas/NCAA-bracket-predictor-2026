@@ -1,100 +1,109 @@
 """
 02_simulate_bracket.py
 -----------------------
-Run the full 2026 NCAA Tournament simulation and save results.
+Run the full 2026 NCAA Tournament simulation.
+
+Data used:
+  - data/raw/bracket/march_madness_2026_68_teams_verified.csv   (68-team stats)
+  - data/raw/bracket/march_madness_2026_parsed_game_logs.csv    (full season H2H)
+  - data/raw/celebrity_brackets/*.csv                           (9 expert brackets)
 
 Usage:
     python scripts/02_simulate_bracket.py
 """
 
-import sys, os
+import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pandas as pd
 from src.collectors.bracket_collector import BracketCollector
-from src.collectors.celebrity_brackets import CelebrityBrackets
 from src.collectors.season_results import SeasonResults
+from src.collectors.celebrity_brackets import CelebrityBrackets
 from src.bracket.simulator import BracketSimulator
 
-RESULTS_PATH = "data/processed/simulation_results.csv"
-BRACKET_PATH = "data/processed/predicted_bracket.json"
+RESULTS_CSV  = "data/processed/simulation_results.csv"
+BRACKET_JSON = "data/processed/predicted_bracket.json"
 
 
 def main():
-    # --- Load teams ---
+    # ── Teams ────────────────────────────────────────────────────────
     print("Loading 2026 bracket data...")
     collector = BracketCollector()
     teams = collector.load_bracket()
-    print(f"  {len(teams)} teams loaded across {teams['Region'].nunique()} regions")
+    print(f"  {len(teams)} teams across {teams['Region'].nunique()} regions")
 
-    # --- Load season game results ---
-    print("\nLoading season game results...")
+    # ── Season game logs ─────────────────────────────────────────────
+    print("\nLoading season game logs...")
     season = SeasonResults()
     if season.is_empty:
-        print("  No game data found in data/raw/games/ — using efficiency stats only.")
-        print("  Drop CSV files there to enable head-to-head and common opponent analysis.")
+        print("  WARNING: No game data — predictions use efficiency stats only.")
     else:
-        print(f"  {len(season.games)} games loaded.")
+        h2h_count = len(season.games[season.games["OpponentClean"].isin(
+            set(season.games["Team"].unique())
+        )])
+        print(f"  {len(season.games):,} games loaded")
+        print(f"  {h2h_count} head-to-head games between tournament teams")
 
-    # --- Load celebrity brackets ---
+    # ── Celebrity brackets ───────────────────────────────────────────
     print("\nLoading celebrity brackets...")
     cb = CelebrityBrackets()
     print(cb.summary())
-    consensus = cb.get_consensus_picks()
 
-    # --- Simulate ---
-    print("\nSimulating tournament...")
-    sim = BracketSimulator(teams, celebrity_picks=consensus, season_results=season)
-    results = sim.simulate()
-
-    # --- Print bracket ---
+    # ── Simulate ─────────────────────────────────────────────────────
+    print("\nSimulating tournament...\n")
+    sim = BracketSimulator(teams, season_results=season, celebrity_brackets=cb)
+    sim.simulate()
     sim.print_bracket()
 
-    # --- Save results ---
+    # ── Save outputs ─────────────────────────────────────────────────
     os.makedirs("data/processed", exist_ok=True)
     df = sim.to_dataframe()
-    df.to_csv(RESULTS_PATH, index=False)
-    print(f"\nSaved {len(df)} game predictions to {RESULTS_PATH}")
+    df.to_csv(RESULTS_CSV, index=False)
+    print(f"\nSaved {len(df)} game predictions → {RESULTS_CSV}")
 
-    # --- Save bracket JSON (for web app) ---
-    import json
-    bracket_json = build_bracket_json(df, teams)
-    with open(BRACKET_PATH, "w") as f:
+    bracket_json = _build_bracket_json(df, teams)
+    with open(BRACKET_JSON, "w") as f:
         json.dump(bracket_json, f, indent=2)
-    print(f"Saved bracket JSON to {BRACKET_PATH}")
+    print(f"Saved bracket JSON → {BRACKET_JSON}")
 
-    # --- Summary ---
+    # ── Final summary ─────────────────────────────────────────────────
     champ = df[df["round_num"] == 6].iloc[0]["winner"]
-    ff = df[df["round_num"] == 5]["winner"].tolist()
-    e8 = df[df["round_num"] == 4]["winner"].tolist()
-    print(f"\n{'='*50}")
-    print(f"  NATIONAL CHAMPION:  {champ}")
-    print(f"  FINAL FOUR:         {ff}")
-    print(f"  ELITE EIGHT:        {e8}")
-    print(f"{'='*50}")
+    ff    = df[df["round_num"] == 5]["winner"].tolist()
+    e8    = df[df["round_num"] == 4]["winner"].tolist()
+    print(f"\n{'='*55}")
+    print(f"  NATIONAL CHAMPION : {champ}")
+    print(f"  FINAL FOUR        : {', '.join(ff)}")
+    print(f"  ELITE EIGHT       : {', '.join(e8)}")
+    print(f"\n  Celebrity champion votes:")
+    for team, n in cb.champion_votes.most_common():
+        print(f"    {team}: {n}/9")
+    print(f"{'='*55}")
 
 
-def build_bracket_json(results_df: pd.DataFrame, teams_df: pd.DataFrame) -> dict:
-    """Converts simulation results into a nested JSON for the web app."""
+def _build_bracket_json(results_df, teams_df):
     rounds = {}
+    team_idx = teams_df.set_index("Team")
     for rn in sorted(results_df["round_num"].unique()):
-        round_name = results_df[results_df["round_num"] == rn].iloc[0]["round_name"]
+        rname = results_df[results_df["round_num"] == rn].iloc[0]["round_name"]
         games = []
         for _, row in results_df[results_df["round_num"] == rn].iterrows():
+            def seed_of(name):
+                return int(team_idx.loc[name, "Seed"]) if name in team_idx.index else None
             games.append({
-                "team_a":     row["team_a"],
-                "team_b":     row["team_b"],
-                "winner":     row["winner"],
-                "win_prob":   row["win_prob_a"],
-                "confidence": row["confidence"],
-                "region":     row["region"],
-                "seed_a":     int(teams_df.set_index("Team").loc[row["team_a"], "Seed"]) if row["team_a"] in teams_df["Team"].values else None,
-                "seed_b":     int(teams_df.set_index("Team").loc[row["team_b"], "Seed"]) if row["team_b"] in teams_df["Team"].values else None,
+                "team_a":          row["team_a"],
+                "team_b":          row["team_b"],
+                "winner":          row["winner"],
+                "win_prob":        row["win_prob_a"],
+                "confidence":      row["confidence"],
+                "region":          row["region"],
+                "seed_a":          seed_of(row["team_a"]),
+                "seed_b":          seed_of(row["team_b"]),
+                "h2h_games":       row["factors"]["h2h_games"],
+                "h2h_score":       row["factors"]["h2h_score"],
+                "celebrity_pick":  row["factors"]["celebrity_pick"],
+                "celebrity_agree": row["factors"]["celebrity_agree"],
             })
-        rounds[str(rn)] = {"round_name": round_name, "games": games}
-
-    team_stats = teams_df.to_dict(orient="records")
-    return {"rounds": rounds, "teams": team_stats}
+        rounds[str(rn)] = {"round_name": rname, "games": games}
+    return {"rounds": rounds, "teams": teams_df.to_dict(orient="records")}
 
 
 if __name__ == "__main__":

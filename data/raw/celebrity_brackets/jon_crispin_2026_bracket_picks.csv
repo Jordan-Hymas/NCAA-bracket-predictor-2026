@@ -1,0 +1,64 @@
+Region,Round,Matchup,Winner
+East,Round of 64,Duke vs Siena,Duke
+East,Round of 64,Ohio State vs TCU,TCU
+East,Round of 64,St John's vs Northern Iowa,St John's
+East,Round of 64,Kansas vs CA Baptist,Kansas
+East,Round of 64,Louisville vs South Florida,South Florida
+East,Round of 64,Michigan St vs N Dakota St,Michigan St
+East,Round of 64,UCLA vs UCF,UCF
+East,Round of 64,UConn vs Furman,UConn
+South,Round of 64,Florida vs PV/LEH,Florida
+South,Round of 64,Clemson vs Iowa,Iowa
+South,Round of 64,Vanderbilt vs McNeese,Vanderbilt
+South,Round of 64,Nebraska vs Troy,Nebraska
+South,Round of 64,North Carolina vs VCU,VCU
+South,Round of 64,Illinois vs Penn,Illinois
+South,Round of 64,Saint Mary's vs Texas A&M,Texas A&M
+South,Round of 64,Houston vs Idaho,Houston
+West,Round of 64,Arizona vs Long Island,Arizona
+West,Round of 64,Villanova vs Utah State,Utah State
+West,Round of 64,Wisconsin vs High Point,Wisconsin
+West,Round of 64,Arkansas vs Hawai'i,Arkansas
+West,Round of 64,BYU vs Texas,Texas
+West,Round of 64,Gonzaga vs Kennesaw St,Gonzaga
+West,Round of 64,Miami vs Missouri,Missouri
+West,Round of 64,Purdue vs Queens,Purdue
+Midwest,Round of 64,Michigan vs Howard,Michigan
+Midwest,Round of 64,Georgia vs Saint Louis,Saint Louis
+Midwest,Round of 64,Texas Tech vs Akron,Akron
+Midwest,Round of 64,Alabama vs Hofstra,Alabama
+Midwest,Round of 64,Tennessee vs M-OH/SMU,Tennessee
+Midwest,Round of 64,Virginia vs Wright St,Virginia
+Midwest,Round of 64,Kentucky vs Santa Clara,Santa Clara
+Midwest,Round of 64,Iowa State vs Tennessee St,Iowa State
+East,Round of 32,Duke vs TCU,Duke
+East,Round of 32,St John's vs Kansas,Kansas
+East,Round of 32,South Florida vs Michigan St,Michigan St
+East,Round of 32,UCF vs UConn,UConn
+South,Round of 32,Florida vs Iowa,Florida
+South,Round of 32,Vanderbilt vs Nebraska,Vanderbilt
+South,Round of 32,VCU vs Illinois,Illinois
+South,Round of 32,Texas A&M vs Houston,Houston
+West,Round of 32,Arizona vs Utah State,Arizona
+West,Round of 32,Wisconsin vs Arkansas,Arkansas
+West,Round of 32,Texas vs Gonzaga,Gonzaga
+West,Round of 32,Missouri vs Purdue,Purdue
+Midwest,Round of 32,Michigan vs Saint Louis,Michigan
+Midwest,Round of 32,Akron vs Alabama,Alabama
+Midwest,Round of 32,Tennessee vs Virginia,Virginia
+Midwest,Round of 32,Santa Clara vs Iowa State,Iowa State
+East,Sweet 16,Duke vs Kansas,Duke
+East,Sweet 16,Michigan St vs UConn,Michigan St
+South,Sweet 16,Florida vs Vanderbilt,Florida
+South,Sweet 16,Illinois vs Houston,Illinois
+West,Sweet 16,Arizona vs Arkansas,Arkansas
+West,Sweet 16,Gonzaga vs Missouri,Gonzaga
+Midwest,Sweet 16,Michigan vs Alabama,Michigan
+Midwest,Sweet 16,Virginia vs Iowa State,Virginia
+East,Elite 8,Duke vs Michigan St,Duke
+South,Elite 8,Florida vs Illinois,Florida
+West,Elite 8,Arkansas vs Gonzaga,Arkansas
+Midwest,Elite 8,Michigan vs Virginia,Michigan
+Final Four,Final Four,Duke vs Illinois,Duke
+Final Four,Final Four,Arkansas vs Michigan,Michigan
+Championship,Championship,Duke vs Michigan,Michigan

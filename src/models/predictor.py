@@ -1,38 +1,30 @@
 """
 predictor.py
 ------------
-Predicts the winner of a matchup using this season's data:
+Predicts game winners using a layered evidence model:
 
-Priority order:
-  1. Direct head-to-head results this season (strongest signal)
-  2. Common opponent analysis (how both teams fared vs shared opponents)
-  3. Season efficiency stats (NetRtg, ORtg, DRtg, SOS, Tempo, Luck)
-  4. Seed-based prior (weakest — only used when stats are similar)
-  5. Celebrity bracket consensus (small ensemble weight)
+  Priority 1 — Head-to-head results this season (strongest signal)
+  Priority 2 — Common opponent margin comparison (neutral-adjusted)
+  Priority 3 — Season efficiency stats (NetRtg, ORtg, DRtg, SOS, Luck)
+  Priority 4 — Celebrity bracket consensus (9 ESPN/media experts)
+  Priority 5 — Seed-based historical prior (1985–2024 empirical rates)
 
-Win probability formula (logistic):
-  P(A wins) = sigmoid(
-      w_h2h   * h2h_score        +   # direct matchup result
-      w_copp  * common_opp_diff  +   # common opponent comparison
-      w_net   * Δnet_rtg         +   # season efficiency
-      w_sos   * Δsos             +   # strength of schedule
-      w_luck  * Δluck            +   # luck regression signal
-      w_tempo * Δtempo           +   # pace matchup
-      w_seed  * seed_prior_logit +   # seed-based historical prior
-      w_celeb * celeb_logit          # celebrity consensus
-  )
+All signals are converted to logit space and summed with learned weights,
+then passed through sigmoid to produce P(team_a wins).
 """
 
 from __future__ import annotations
+
 import math
 from typing import Optional, TYPE_CHECKING
+
 import pandas as pd
 
 if TYPE_CHECKING:
     from src.collectors.season_results import SeasonResults
 
 # ---------------------------------------------------------------------------
-# Historical seed matchup win rates (1985–2024 empirical)
+# Empirical seed-matchup win rates (1985–2024)
 # ---------------------------------------------------------------------------
 SEED_WIN_RATES: dict[tuple[int, int], float] = {
     (1, 16): 0.991, (2, 15): 0.940, (3, 14): 0.851, (4, 13): 0.793,
@@ -44,19 +36,20 @@ SEED_WIN_RATES: dict[tuple[int, int], float] = {
     (2,  3): 0.599, (1,  2): 0.586, (1,  3): 0.636,
 }
 
-# Model weights
-# When h2h data is available it dominates; efficiency fills in the gaps.
-WEIGHTS = {
-    "h2h":       0.35,   # direct head-to-head result this season
-    "common_opp": 0.20,  # common opponent margin comparison
-    "net_rtg":   0.18,   # net efficiency rating delta
-    "sos":       0.10,   # strength of schedule delta
-    "off_rtg":   0.04,   # offensive rating delta
-    "def_rtg":   0.04,   # defensive rating delta (inverted)
-    "luck":      0.03,   # luck (negative — regress lucky teams)
-    "tempo":     0.01,   # pace mismatch
-    "seed":      0.04,   # seed-based historical prior
-    "celebrity": 0.01,   # celebrity bracket consensus
+# ---------------------------------------------------------------------------
+# Model weights — how much each signal contributes in logit space
+# ---------------------------------------------------------------------------
+W = {
+    "h2h":        0.32,  # direct H2H result this season
+    "common_opp": 0.22,  # common opponent margin differential
+    "net_rtg":    0.18,  # season net efficiency rating
+    "sos":        0.09,  # strength of schedule
+    "off_rtg":    0.04,  # offensive rating
+    "def_rtg":    0.04,  # defensive rating (inverted)
+    "luck":       0.03,  # luck (negative signal — regress lucky teams)
+    "tempo":      0.01,  # pace mismatch
+    "celebrity":  0.05,  # per-matchup expert consensus
+    "seed":       0.02,  # historical seed prior (weak in stat-rich model)
 }
 
 
@@ -80,83 +73,80 @@ class GamePredictor:
         self,
         season_results: Optional["SeasonResults"] = None,
         teams_df: Optional[pd.DataFrame] = None,
-        celebrity_weight: float = WEIGHTS["celebrity"],
     ):
-        self.season_results = season_results
+        self.sr = season_results
         self.teams_df = teams_df
-        self.celebrity_weight = celebrity_weight
 
     def predict(
         self,
         team_a: pd.Series,
         team_b: pd.Series,
+        round_num: int = 1,
         celebrity_pick: Optional[str] = None,
+        celebrity_agreement: float = 0.5,
     ) -> dict:
         """
         Returns:
-          winner       - predicted winning team name
-          win_prob_a   - P(team_a wins) ∈ [0, 1]
-          win_prob     - P(winner wins) ∈ [0.5, 1]
-          confidence   - 'low' | 'medium' | 'high'
-          factors      - breakdown of each signal
+          team_a, team_b    — input team names
+          winner            — predicted winner
+          win_prob_a        — P(team_a wins) ∈ [0, 1]
+          win_prob          — P(winner wins) ∈ [0.5, 1]
+          confidence        — 'low' | 'medium' | 'high'
+          factors           — per-signal breakdown dict
         """
-        name_a = team_a.name
-        name_b = team_b.name
+        name_a, name_b = team_a.name, team_b.name
 
-        # ---- 1. Head-to-head signal ----
-        h2h_score = 0.0
-        h2h_games = []
-        if self.season_results and not self.season_results.is_empty:
-            h2h_score = self.season_results.h2h_advantage(name_a, name_b)
-            h2h_games = self.season_results.get_h2h(name_a, name_b)
+        # ── 1. Head-to-head ──────────────────────────────────────────
+        h2h_score   = 0.0
+        h2h_game_ct = 0
+        if self.sr and not self.sr.is_empty:
+            h2h_score   = self.sr.h2h_advantage(name_a, name_b)
+            h2h_game_ct = len(self.sr.get_h2h_games(name_a, name_b))
 
-        # ---- 2. Common opponent signal ----
-        common_opp_diff = 0.0
-        if (self.season_results and not self.season_results.is_empty
-                and self.teams_df is not None):
-            raw = self.season_results.common_opponent_advantage(
-                name_a, name_b, self.teams_df
-            )
-            # Normalize: ~10pt margin difference ≈ logit(0.7)
-            common_opp_diff = _logit(0.5 + raw / 40)
+        # ── 2. Common opponents ───────────────────────────────────────
+        co_diff = 0.0
+        if self.sr and not self.sr.is_empty:
+            co_raw  = self.sr.common_opponent_advantage(name_a, name_b)
+            # ~15 pt diff → logit(0.8); normalize and convert to logit
+            co_diff = _logit(0.5 + max(-0.45, min(0.45, co_raw / 30)))
 
-        # ---- 3. Season efficiency signals ----
+        # ── 3. Efficiency stats ───────────────────────────────────────
         d_net   = team_a["NetRtg"]     - team_b["NetRtg"]
         d_off   = team_a["ORtg"]       - team_b["ORtg"]
-        d_def   = -(team_a["DRtg"]    - team_b["DRtg"])  # lower DRtg is better
+        d_def   = -(team_a["DRtg"]    - team_b["DRtg"])   # lower = better
         d_sos   = team_a["SOS_NetRtg"] - team_b["SOS_NetRtg"]
         d_luck  = team_a["Luck"]       - team_b["Luck"]
         d_tempo = team_a["AdjT"]       - team_b["AdjT"]
 
-        # ---- 4. Seed prior ----
+        # ── 4. Celebrity consensus ────────────────────────────────────
+        celeb_logit = 0.0
+        if celebrity_pick is not None:
+            # agreement ∈ [0.5, 1.0] → P ∈ [0.55, 0.80] for the picked team
+            raw_p  = 0.5 + (celebrity_agreement - 0.5) * 0.6
+            celeb_p = raw_p if celebrity_pick == name_a else 1 - raw_p
+            celeb_logit = _logit(celeb_p)
+
+        # ── 5. Seed prior ─────────────────────────────────────────────
         seed_p     = _seed_prior(int(team_a["Seed"]), int(team_b["Seed"]))
         seed_logit = _logit(seed_p)
 
-        # ---- 5. Celebrity consensus ----
-        celeb_logit = 0.0
-        if celebrity_pick is not None:
-            celeb_p = 0.65 if celebrity_pick == name_a else 0.35
-            celeb_logit = _logit(celeb_p)
-
-        # ---- Weighted score → probability ----
-        # Scale factors so they live in a comparable range in logit space
+        # ── Weighted sum ──────────────────────────────────────────────
         score = (
-            WEIGHTS["h2h"]        * h2h_score      * 3.0   +
-            WEIGHTS["common_opp"] * common_opp_diff         +
-            WEIGHTS["net_rtg"]    * d_net           * 0.25  +
-            WEIGHTS["sos"]        * d_sos           * 0.35  +
-            WEIGHTS["off_rtg"]    * d_off           * 0.20  +
-            WEIGHTS["def_rtg"]    * d_def           * 0.20  +
-            WEIGHTS["luck"]       * (-d_luck)       * 1.00  +
-            WEIGHTS["tempo"]      * d_tempo         * 0.05  +
-            WEIGHTS["seed"]       * seed_logit               +
-            self.celebrity_weight * celeb_logit
+            W["h2h"]        * h2h_score  * 3.0   +
+            W["common_opp"] * co_diff            +
+            W["net_rtg"]    * d_net      * 0.22  +
+            W["sos"]        * d_sos      * 0.30  +
+            W["off_rtg"]    * d_off      * 0.18  +
+            W["def_rtg"]    * d_def      * 0.18  +
+            W["luck"]       * (-d_luck)  * 0.80  +
+            W["tempo"]      * d_tempo    * 0.04  +
+            W["celebrity"]  * celeb_logit        +
+            W["seed"]       * seed_logit
         )
 
         win_prob_a = _sigmoid(score)
         winner     = name_a if win_prob_a >= 0.5 else name_b
         win_prob   = win_prob_a if winner == name_a else 1 - win_prob_a
-
         confidence = "low" if win_prob < 0.58 else "medium" if win_prob < 0.72 else "high"
 
         return {
@@ -167,12 +157,14 @@ class GamePredictor:
             "win_prob":   round(win_prob, 4),
             "confidence": confidence,
             "factors": {
-                "h2h_games":        len(h2h_games),
+                "h2h_games":        h2h_game_ct,
                 "h2h_score":        round(h2h_score, 3),
-                "common_opp_diff":  round(common_opp_diff, 3),
+                "common_opp_pts":   round(self.sr.common_opponent_advantage(name_a, name_b)
+                                         if self.sr else 0, 2),
                 "net_rtg_diff":     round(d_net, 2),
                 "sos_diff":         round(d_sos, 2),
                 "seed_prior":       round(seed_p, 3),
-                "celeb_pick":       celebrity_pick,
+                "celebrity_pick":   celebrity_pick,
+                "celebrity_agree":  round(celebrity_agreement, 2),
             },
         }
